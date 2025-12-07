@@ -7,6 +7,20 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PLAIN='\033[0m'
 
+# 生成随机密码函数 (20位大小写数字混合)
+generate_password() {
+    local length=20
+    local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    local password=""
+    
+    # 使用 /dev/urandom 生成随机密码
+    for ((i=0; i<length; i++)); do
+        password="${password}${chars:$((RANDOM % ${#chars})):1}"
+    done
+    
+    echo "$password"
+}
+
 # 检查是否为 Root 用户
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}错误：请使用 Root 用户运行此脚本！${PLAIN}" 
@@ -14,7 +28,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 echo -e "${BLUE}=================================================${PLAIN}"
-echo -e "${BLUE}      VPS 快速初始化脚本 (User: Maple / Port: 2077)      ${PLAIN}"
+echo -e "${BLUE}      VPS 快速初始化脚本 (Port: 2077)      ${PLAIN}"
 echo -e "${BLUE}=================================================${PLAIN}"
 
 # 0. 选择服务器位置
@@ -37,15 +51,63 @@ apt update -y && apt upgrade -y
 apt install -y curl wget git ufw fail2ban sudo zsh
 
 # 1 & 2 & 3. 用户创建与密钥配置
-echo -e "${YELLOW}正在创建用户 Maple...${PLAIN}"
-USERNAME="maple"
+echo -e "${YELLOW}正在创建用户...${PLAIN}"
+
+# 让用户输入用户名
+read -p "请输入要创建的用户名 (将自动转换为小写): " input_username
+if [[ -z "$input_username" ]]; then
+    echo -e "${RED}错误：用户名不能为空！${PLAIN}"
+    exit 1
+fi
+
+# 转换为纯小写
+USERNAME=$(echo "$input_username" | tr '[:upper:]' '[:lower:]')
+
+echo -e "${GREEN}将创建用户: $USERNAME${PLAIN}"
+
+# 设置密码
+read -s -p "请为用户 $USERNAME 设置密码 (直接回车将生成20位随机密码): " user_password
+echo
+
+if [[ -z "$user_password" ]]; then
+    # 生成随机密码
+    user_password=$(generate_password)
+    echo -e "${GREEN}已生成随机密码。${PLAIN}"
+else
+    echo -e "${GREEN}密码已设置。${PLAIN}"
+fi
+
+# 创建用户或检测是否已存在
 if id "$USERNAME" &>/dev/null; then
-    echo -e "${RED}用户 $USERNAME 已存在，跳过创建。${PLAIN}"
+    echo -e "${YELLOW}用户 $USERNAME 已存在，跳过创建。${PLAIN}"
 else
     useradd -m -s /bin/zsh $USERNAME
-    usermod -aG sudo $USERNAME
+    echo "$USERNAME:$user_password" | chpasswd
     echo -e "${GREEN}用户 $USERNAME 创建成功。${PLAIN}"
 fi
+
+# 添加用户到sudo组
+usermod -aG sudo $USERNAME
+
+# 创建NOPASSWD sudo组并添加用户
+NOPASSWD_GROUP="${USERNAME}_nopasswd"
+echo -e "${YELLOW}正在配置 sudo 无密码权限...${PLAIN}"
+
+# 创建NOPASSWD组
+groupadd $NOPASSWD_GROUP 2>/dev/null || true
+
+# 将用户加入NOPASSWD组
+usermod -aG $NOPASSWD_GROUP $USERNAME
+
+# 创建sudo配置文件
+cat > /etc/sudoers.d/$USERNAME <<EOF
+%${NOPASSWD_GROUP} ALL=(ALL) NOPASSWD: ALL
+EOF
+
+# 设置正确的文件权限
+chmod 440 /etc/sudoers.d/$USERNAME
+
+echo -e "${GREEN}sudo 无密码权限配置完成。${PLAIN}"
 
 # 获取公钥
 echo -e "${YELLOW}请粘贴你的 SSH 公钥 (ssh-rsa/ssh-ed25519 ...):${PLAIN}"
@@ -168,11 +230,17 @@ fi
 echo -e "${BLUE}=================================================${PLAIN}"
 echo -e "${GREEN} 所有配置已完成！ ${PLAIN}"
 echo -e "${BLUE}=================================================${PLAIN}"
+echo -e "用户信息："
+echo -e "用户名: ${GREEN}$USERNAME${PLAIN}"
+echo -e "密码: ${YELLOW}$user_password${PLAIN}"
+echo -e "SSH端口: ${RED}2077${PLAIN}"
+echo -e ""
 echo -e "请注意："
 echo -e "1. SSH 端口已改为: ${RED}2077${PLAIN}"
 echo -e "2. Root 登录已禁用，密码登录已禁用。"
-echo -e "3. 请使用用户: ${GREEN}Maple${PLAIN} 和你的 ${YELLOW}私钥${PLAIN} 登录。"
-echo -e "4. 命令示例: ssh -p 2077 Maple@<Server-IP>"
+echo -e "3. 请使用用户: ${GREEN}$USERNAME${PLAIN} 和你的 ${YELLOW}私钥${PLAIN} 登录。"
+echo -e "4. 命令示例: ssh -p 2077 $USERNAME@<Server-IP>"
+echo -e "5. 该用户拥有 sudo 无密码权限。"
 echo -e "${RED}*** 重要: 请不要关闭当前窗口，立即新开一个终端测试能否连接！ ***${PLAIN}"
 echo -e "${RED}*** 测试成功后再重启 SSH 服务或重启服务器！ ***${PLAIN}"
 echo -e "${BLUE}=================================================${PLAIN}"
