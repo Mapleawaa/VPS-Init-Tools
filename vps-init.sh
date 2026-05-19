@@ -752,39 +752,39 @@ phase5_speedtest_bbr() {
         LATENCY_MS=50
     fi
 
-    # 5c. Install XanMod kernel (BBRv3)
-    log_info "Installing XanMod kernel (BBRv3)..."
-    log_info "Adding XanMod repository..."
-    curl -fsSL https://dl.xanmod.org/archive.key 2>/dev/null | gpg --dearmor -o /etc/apt/keyrings/xanmod.gpg 2>/dev/null || true
-    echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" > /etc/apt/sources.list.d/xanmod.list 2>/dev/null || true
-    apt-get update -y -qq 2>/dev/null || log_warn "XanMod repo update had issues"
+    # 5c. BBRv3 — optional interactive tuning via external script
+    if confirm_yes "Configure BBRv3 with the external tuning script?"; then
+        log_info "The tuning script (by Eric86777) will open. Typical flow:"
+        log_info "  1) Select ${CYAN}[1]${PLAIN} to install XanMod kernel (BBRv3) — needs reboot later"
+        log_info "  2) After reboot, select ${CYAN}[3]${PLAIN} for BBR tuning (bandwidth detection)"
+        log_info "  3) Type ${CYAN}[0]${PLAIN} to exit when done"
+        log_info "Downloading: https://github.com/Eric86777/vps-tcp-tune"
+        echo ""
+        read -rp "$(echo -e "${YELLOW}Press Enter to launch the tuning script...${PLAIN}")"
 
-    # Detect correct XanMod package for CPU architecture / x86-64 microarchitecture level
-    local xanmod_pkg=""
-    if [[ "$ARCH" == "aarch64" ]]; then
-        xanmod_pkg="linux-xanmod-arm64"
-    elif [[ "$ARCH" == "x86_64" ]]; then
-        local flags
-        flags=$(grep -o 'flags\s*:.*' /proc/cpuinfo | head -1)
-        if echo "$flags" | grep -q "avx512"; then
-            xanmod_pkg="linux-xanmod-x64v4"
-        elif echo "$flags" | grep -q "avx2"; then
-            xanmod_pkg="linux-xanmod-x64v3"
+        local tcp_tune_url="https://raw.githubusercontent.com/Eric86777/vps-tcp-tune/main/net-tcp-tune.sh"
+        [[ "$REGION" == "CN" ]] && tcp_tune_url="https://ghfast.top/${tcp_tune_url}"
+        local tcp_script="/tmp/net-tcp-tune.sh"
+        if curl -fsSL "$tcp_tune_url" -o "$tcp_script" 2>/dev/null; then
+            chmod +x "$tcp_script"
+            bash "$tcp_script" || true
+            if dpkg -l 2>/dev/null | grep -q "linux-image.*xanmod"; then
+                BBR_INSTALLED=1
+                log_ok "XanMod kernel detected after external script"
+            fi
         else
-            xanmod_pkg="linux-xanmod-x64v2"
+            log_warn "Failed to download tuning script"
         fi
-    fi
-
-    if [[ -n "$xanmod_pkg" ]]; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$xanmod_pkg" 2>/dev/null && {
-            BBR_INSTALLED=1
-            log_ok "XanMod kernel installed: $xanmod_pkg"
-        } || log_warn "XanMod kernel install failed — host may not support it, using current kernel"
     else
-        log_warn "Unsupported architecture ($ARCH), skipping XanMod kernel"
+        # Quick auto mode: just add the repo so user can install later
+        log_info "Adding XanMod repository for manual install..."
+        curl -fsSL https://dl.xanmod.org/archive.key 2>/dev/null | gpg --dearmor -o /etc/apt/keyrings/xanmod.gpg 2>/dev/null || true
+        echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" > /etc/apt/sources.list.d/xanmod.list 2>/dev/null || true
+        apt-get update -y -qq 2>/dev/null || true
+        log_info "XanMod repo added. Install later with: apt install linux-xanmod-x64v3"
     fi
 
-    # 5d-5e. Calculate BDP and set TCP parameters
+    # 5d-5e. Calculate BDP and set TCP parameters (always runs as baseline)
     log_info "Calculating TCP buffer sizes from speedtest..."
     local bdp bdp_kb
     # BDP = bandwidth (bps) * RTT (s) / 8 = bytes
