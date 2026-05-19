@@ -671,8 +671,12 @@ EOF
         log_ok "Sufficient disk space, no space-saving needed"
     fi
 
-    # 4f. Block memory ballooning drivers
-    log_info "Checking for memory ballooning drivers..."
+    # 4f. Virtualization protection — block host interference channels
+    log_info "Scanning for virtualization interference channels..."
+    local blist="/etc/modprobe.d/99-vps-init-blacklist.conf"
+    touch "$blist"
+
+    # -- Memory ballooning drivers (host reclaims guest RAM) --
     local balloon_modules=(
         "virtio_balloon"
         "vmw_balloon"
@@ -686,24 +690,91 @@ EOF
         fi
     done
 
-    if [[ $found_balloon -eq 1 ]] || confirm_yes "Force-block balloon drivers?"; then
-        local blist="/etc/modprobe.d/99-vps-init-blacklist.conf"
-        {
-            echo "# VPS Init - Block memory ballooning drivers"
-            echo "# Prevents host over-provisioning from reclaiming guest memory"
-            for mod in "${balloon_modules[@]}"; do
-                if ! grep -q "blacklist ${mod}" "$blist" 2>/dev/null; then
-                    echo "blacklist ${mod}"
-                fi
-                # Unload if active
-                if lsmod 2>/dev/null | grep -q "^${mod}"; then
-                    modprobe -r "$mod" 2>/dev/null && log_ok "Unloaded: ${mod}" || log_warn "Could not unload ${mod}"
-                fi
-            done
-        } >> "$blist"
-        log_ok "Balloon drivers blacklisted (${blist})"
-    else
-        log_info "Skipping balloon driver block"
+    if [[ $found_balloon -eq 1 ]] || confirm_yes "Block memory balloon drivers?"; then
+        for mod in "${balloon_modules[@]}"; do
+            if ! grep -q "blacklist ${mod}" "$blist" 2>/dev/null; then
+                echo "blacklist ${mod}" >> "$blist"
+            fi
+            if lsmod 2>/dev/null | grep -q "^${mod}"; then
+                modprobe -r "$mod" 2>/dev/null && log_ok "Unloaded: ${mod}" || log_warn "Could not unload ${mod}"
+            fi
+        done
+        log_ok "Balloon drivers blacklisted"
+    fi
+
+    # -- Guest agents (host-side RCE / guest command execution) --
+    local guest_agents=(
+        "qemu-guest-agent:qemu-ga:KVM/QEMU guest agent — allows host to execute commands inside VM"
+        "open-vm-tools:vmtoolsd:VMware Tools — host controls guest memory/networking"
+        "xe-guest-utilities:xe-daemon:XenServer guest utilities"
+        "hv_kvp_daemon:hv_kvp_daemon:Hyper-V key-value pair daemon"
+        "hv_vss_daemon:hv_vss_daemon:Hyper-V Volume Shadow Copy daemon"
+    )
+    local found_agent=0
+    for entry in "${guest_agents[@]}"; do
+        local pkg="${entry%%:*}"
+        local svc
+        svc=$(echo "$entry" | cut -d: -f2)
+        local desc="${entry##*:}"
+        if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+            log_warn "Guest agent installed: ${pkg} (${desc})"
+            found_agent=1
+        fi
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            log_warn "Guest agent service running: ${svc}"
+            found_agent=1
+        fi
+    done
+
+    if [[ $found_agent -eq 1 ]] || confirm_yes "Remove guest agents? (blocks host RCE channel)"; then
+        for entry in "${guest_agents[@]}"; do
+            local pkg="${entry%%:*}"
+            if dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"; then
+                systemctl stop "$(echo "$entry" | cut -d: -f2)" 2>/dev/null || true
+                systemctl mask "$(echo "$entry" | cut -d: -f2)" 2>/dev/null || true
+                DEBIAN_FRONTEND=noninteractive apt-get purge -y "$pkg" 2>/dev/null && log_ok "Removed: ${pkg}" || log_warn "Could not purge ${pkg}, service masked"
+            fi
+        done
+        log_ok "Guest agents removed/masked"
+    fi
+
+    # -- ACPI memory hotplug (host hot-adds/removes RAM) --
+    if grep -q "acpi_memhotplug" /proc/modules 2>/dev/null; then
+        log_warn "ACPI memory hotplug detected — host can manipulate guest RAM layout"
+        if confirm_yes "Block ACPI memory hotplug?"; then
+            if ! grep -q "blacklist acpi_memhotplug" "$blist" 2>/dev/null; then
+                echo "blacklist acpi_memhotplug" >> "$blist"
+            fi
+            modprobe -r acpi_memhotplug 2>/dev/null && log_ok "ACPI memory hotplug blocked" || log_warn "Could not unload acpi_memhotplug"
+        fi
+    fi
+
+    # -- Kernel NUMA balancing (confuses guest on oversubscribed hosts) --
+    local numa_val
+    numa_val=$(cat /proc/sys/kernel/numa_balancing 2>/dev/null || echo "0")
+    if [[ "$numa_val" != "0" ]]; then
+        log_info "Disabling NUMA balancing (prevents host oversubscription inference)"
+        cat > /etc/sysctl.d/99-vps-init-numa.conf <<EOF
+# VPS Init - Disable NUMA balancing
+# Prevents host over-provisioning detection artifacts
+kernel.numa_balancing = 0
+EOF
+        sysctl -w kernel.numa_balancing=0 2>/dev/null || true
+        log_ok "NUMA balancing disabled"
+    fi
+
+    # -- Transparent hugepage defrag (reduces memory pressure signals) --
+    local thp_defrag
+    thp_defrag=$(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || echo "")
+    if echo "$thp_defrag" | grep -q "\[always\]"; then
+        log_info "Setting THP defrag to madvise (reduces unpredictable memory stalls)"
+        echo madvise > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+        echo 'madvise' > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+        cat >> /etc/sysctl.d/99-vps-init-thp.conf <<EOF
+# VPS Init - Reduce THP defragmentation pressure
+vm.transparent_hugepage/defrag = madvise
+EOF
+        log_ok "THP defrag set to madvise"
     fi
 }
 
