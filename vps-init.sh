@@ -299,7 +299,7 @@ phase2_base_init() {
     _sshd_set ClientAliveCountMax "2"
     _sshd_set X11Forwarding "no"
 
-    systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
+    systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
     log_ok "SSH hardened (port: $SSH_PORT)"
 
     if [[ -n "$USERNAME" ]]; then
