@@ -231,7 +231,9 @@ phase1_detect_env() {
 # Speedtest a mirror: returns total_time (seconds)
 mirror_speed() {
     local url="$1"
-    local test_url="${url}dists/stable/Release"
+    local codename="$2"
+    # Test against actual OS codename, not symlink — some mirrors don't carry all releases
+    local test_url="${url}dists/${codename}/Release"
 
     local total_time
     total_time=$(curl -o /dev/null -s --connect-timeout 5 --max-time 15 \
@@ -265,7 +267,7 @@ find_best_mirror() {
         if [[ -n "$url" ]]; then
             echo -ne "${YELLOW}  Testing $name...${PLAIN}   \r"
             local total
-            total=$(mirror_speed "$url")
+            total=$(mirror_speed "$url" "$OS_CODENAME")
             better=$(awk -v t="$total" -v b="$best_time" 'BEGIN{print (t < b) ? 1 : 0}')
             if [[ "$better" == "1" ]]; then
                 best_time="$total"
@@ -321,8 +323,16 @@ configure_mirror_overseas() {
 
     local release_name="${OS_CODENAME:-bookworm}"
 
+    # Disable any conflicting stock Debian repo files so only our sources.list is active
+    local f
+    for f in /etc/apt/sources.list.d/*.list; do
+        [[ -f "$f" ]] || continue
+        if grep -qE '^(deb|deb-src)\s' "$f" 2>/dev/null; then
+            mv "$f" "${f}.disabled" 2>/dev/null || true
+        fi
+    done
+
     if [[ "$OS_NAME" == "ubuntu" ]]; then
-        # Ubuntu format: security is part of the main archive
         cat > /etc/apt/sources.list <<EOF
 deb $BEST_MIRROR $release_name main restricted universe multiverse
 deb $BEST_MIRROR $release_name-updates main restricted universe multiverse
@@ -330,7 +340,6 @@ deb $BEST_MIRROR $release_name-backports main restricted universe multiverse
 deb $BEST_MIRROR $release_name-security main restricted universe multiverse
 EOF
     else
-        # Debian format: separate security archive
         local sec_url="${BEST_MIRROR%debian/}debian-security"
         cat > /etc/apt/sources.list <<EOF
 deb $BEST_MIRROR $release_name main contrib non-free non-free-firmware
