@@ -228,23 +228,28 @@ phase1_detect_env() {
 # Phase 2 - Base Initialization
 # =============================================================================
 
-# Speedtest a single mirror by measuring download time of a test file
+# Speedtest a mirror: returns "total_time speed_download" (seconds, bytes/sec)
 mirror_speed() {
     local url="$1"
     local test_url="${url}dists/stable/Release"
-    local start_time end_time elapsed
 
-    start_time=$(date +%s.%N)
-    curl -s --connect-timeout 5 --max-time 15 -o /dev/null "$test_url" 2>/dev/null || {
-        echo "999"
+    local result
+    result=$(curl -o /dev/null -s --connect-timeout 5 --max-time 15 \
+        -w "total:%{time_total} speed:%{speed_download} ttfb:%{time_starttransfer}" \
+        "$test_url" 2>/dev/null) || {
+        echo "999 0"
         return
     }
-    end_time=$(date +%s.%N)
-    elapsed=$(echo "$end_time - $start_time" | awk '{printf "%.3f", $1}')
-    echo "$elapsed"
+
+    local total_time speed_download
+    total_time=$(echo "$result" | grep -oP 'total:\K[0-9.]+')
+    speed_download=$(echo "$result" | grep -oP 'speed:\K[0-9.]+')
+    total_time="${total_time:-999}"
+    speed_download="${speed_download:-0}"
+    echo "$total_time $speed_download"
 }
 
-# Find best mirror for a given region by speedtesting all mirrors
+# Find best mirror for a given region by speedtesting all mirrors (fastest total time wins)
 find_best_mirror() {
     local country="$1"
     local region_key="${COUNTRY_TO_REGION[$country]:-Global}"
@@ -254,6 +259,7 @@ find_best_mirror() {
 
     local best_url=""
     local best_time=999
+    local best_speed=0
     local best_name=""
     # Mirror data format: name1|url1|name2|url2|...
     local -a parts=()
@@ -266,21 +272,40 @@ find_best_mirror() {
         local url="${parts[$i+1]:-}"
         if [[ -n "$url" ]]; then
             echo -ne "${YELLOW}  Testing $name...${PLAIN}   \r"
-            local speed
-            speed=$(mirror_speed "$url")
-            if [[ "$(echo "$speed < $best_time" | bc -l 2>/dev/null || echo 0)" == "1" ]]; then
-                best_time="$speed"
+            local raw total speed ttfb_ignore
+            raw=$(mirror_speed "$url")
+            total=$(echo "$raw" | awk '{print $1}')
+            speed=$(echo "$raw" | awk '{print $2}')
+            # Lower total time = better; if tie, higher speed wins
+            local better
+            better=$(echo "$total < $best_time" | bc -l 2>/dev/null || echo "0")
+            if [[ "$better" == "1" ]]; then
+                best_time="$total"
+                best_speed="$speed"
                 best_url="$url"
                 best_name="$name"
+            elif [[ "$(echo "$total == $best_time" | bc -l 2>/dev/null || echo "0")" == "1" ]]; then
+                local speed_better
+                speed_better=$(echo "$speed > $best_speed" | bc -l 2>/dev/null || echo "0")
+                if [[ "$speed_better" == "1" ]]; then
+                    best_time="$total"
+                    best_speed="$speed"
+                    best_url="$url"
+                    best_name="$name"
+                fi
             fi
-            echo -ne "  ${name}: ${speed}s                         \n"
+            local speed_kb
+            speed_kb=$(echo "$speed / 1024" | bc 2>/dev/null || echo "0")
+            printf "  \e[0;36m%-20s\e[0m total:\e[0;33m%.3fs\e[0m speed:\e[0;32m%sKB/s\e[0m\n" "$name" "$total" "$speed_kb"
         fi
         i=$((i + 2))
     done
 
     if [[ -n "$best_url" ]]; then
         BEST_MIRROR="$best_url"
-        log_ok "Best mirror: $best_name ($BEST_MIRROR) - ${best_time}s"
+        local best_speed_kb
+        best_speed_kb=$(echo "$best_speed / 1024" | bc 2>/dev/null || echo "0")
+        log_ok "Best mirror: $best_name ($BEST_MIRROR) - ${best_time}s, ${best_speed_kb}KB/s"
     else
         log_warn "All mirrors failed, using fallback"
         BEST_MIRROR="http://deb.debian.org/debian/"
@@ -362,7 +387,7 @@ phase2_base_init() {
     # 2c. Install base tools
     install_packages \
         curl wget git sudo ca-certificates gnupg lsb-release \
-        apt-transport-https software-properties-common \
+        apt-transport-https \
         net-tools dnsutils htop tmux vim unzip jq \
         bc sysbench python3 ufw fail2ban openssh-server
 
