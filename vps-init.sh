@@ -752,60 +752,36 @@ phase5_speedtest_bbr() {
         LATENCY_MS=50
     fi
 
-    # 5c. Install BBRv3 kernel via external script
-    log_info "Installing BBRv3 kernel (XanMod)..."
-    local tcp_tune_url="https://raw.githubusercontent.com/Eric86777/vps-tcp-tune/main/net-tcp-tune.sh"
-    [[ "$REGION" == "CN" ]] && tcp_tune_url="https://ghfast.top/${tcp_tune_url}"
+    # 5c. Install XanMod kernel (BBRv3)
+    log_info "Installing XanMod kernel (BBRv3)..."
+    log_info "Adding XanMod repository..."
+    curl -fsSL https://dl.xanmod.org/archive.key 2>/dev/null | gpg --dearmor -o /etc/apt/keyrings/xanmod.gpg 2>/dev/null || true
+    echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" > /etc/apt/sources.list.d/xanmod.list 2>/dev/null || true
+    apt-get update -y -qq 2>/dev/null || log_warn "XanMod repo update had issues"
 
-    local tcp_script="/tmp/net-tcp-tune.sh"
-    if curl -fsSL "$tcp_tune_url" -o "$tcp_script" 2>/dev/null; then
-        chmod +x "$tcp_script"
-        # Run function 1 (install XanMod kernel + BBRv3) non-interactively
-        # The script reads user input from stdin for menu selection
-        log_info "Running kernel installation (function 1)..."
-        echo "1" | bash "$tcp_script" 2>&1 || log_warn "Kernel install had issues"
-
-        # Check if XanMod kernel is installed
-        if dpkg -l | grep -q "linux-image.*xanmod" 2>/dev/null; then
-            BBR_INSTALLED=1
-            log_ok "XanMod kernel (BBRv3) installed"
+    # Detect correct XanMod package for CPU architecture / x86-64 microarchitecture level
+    local xanmod_pkg=""
+    if [[ "$ARCH" == "aarch64" ]]; then
+        xanmod_pkg="linux-xanmod-arm64"
+    elif [[ "$ARCH" == "x86_64" ]]; then
+        local flags
+        flags=$(grep -o 'flags\s*:.*' /proc/cpuinfo | head -1)
+        if echo "$flags" | grep -q "avx512"; then
+            xanmod_pkg="linux-xanmod-x64v4"
+        elif echo "$flags" | grep -q "avx2"; then
+            xanmod_pkg="linux-xanmod-x64v3"
         else
-            # Manual XanMod installation as fallback
-            log_info "Attempting manual XanMod kernel install..."
-            curl -fsSL https://dl.xanmod.org/archive.key | gpg --dearmor -o /etc/apt/keyrings/xanmod.gpg 2>/dev/null || true
-            echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" > /etc/apt/sources.list.d/xanmod.list 2>/dev/null || true
-            apt-get update -y -qq 2>/dev/null || true
-
-            # Detect x64v level
-            local xanmod_pkg="linux-xanmod-x64v3"
-            if [[ "$ARCH" == "aarch64" ]]; then
-                xanmod_pkg="linux-xanmod-arm64"
-            elif [[ "$ARCH" == "x86_64" ]]; then
-                local flags
-                flags=$(grep -o 'flags\s*:.*' /proc/cpuinfo | head -1)
-                if echo "$flags" | grep -q "avx512"; then
-                    xanmod_pkg="linux-xanmod-x64v4"
-                elif echo "$flags" | grep -q "avx2"; then
-                    xanmod_pkg="linux-xanmod-x64v3"
-                else
-                    xanmod_pkg="linux-xanmod-x64v2"
-                fi
-            fi
-
-            DEBIAN_FRONTEND=noninteractive apt-get install -y "$xanmod_pkg" 2>/dev/null && {
-                BBR_INSTALLED=1
-                log_ok "XanMod kernel installed manually: $xanmod_pkg"
-            } || log_warn "XanMod kernel install failed, will use current kernel"
+            xanmod_pkg="linux-xanmod-x64v2"
         fi
-    else
-        log_warn "Failed to download tcp-tune script, attempting direct XanMod setup"
-        curl -fsSL https://dl.xanmod.org/archive.key | gpg --dearmor -o /etc/apt/keyrings/xanmod.gpg 2>/dev/null || true
-        echo "deb [signed-by=/etc/apt/keyrings/xanmod.gpg] http://deb.xanmod.org releases main" > /etc/apt/sources.list.d/xanmod.list 2>/dev/null || true
-        apt-get update -y -qq 2>/dev/null || true
-        DEBIAN_FRONTEND=noninteractive apt-get install -y linux-xanmod-x64v3 2>/dev/null && {
+    fi
+
+    if [[ -n "$xanmod_pkg" ]]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$xanmod_pkg" 2>/dev/null && {
             BBR_INSTALLED=1
-            log_ok "XanMod kernel installed"
-        } || log_warn "Could not install BBRv3 kernel"
+            log_ok "XanMod kernel installed: $xanmod_pkg"
+        } || log_warn "XanMod kernel install failed — host may not support it, using current kernel"
+    else
+        log_warn "Unsupported architecture ($ARCH), skipping XanMod kernel"
     fi
 
     # 5d-5e. Calculate BDP and set TCP parameters
