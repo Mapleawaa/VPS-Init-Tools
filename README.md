@@ -66,34 +66,25 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Mapleawaa/VPS-Init-Tools/mai
 |------|------|
 | **Region 自动检测** | 请求 `https://www.dyson.cn/cdn-cgi/trace`，解析 `loc=` 字段自动区分国内/海外 |
 | **智能换源 (国内)** | 调用 `linuxmirrors.cn` 交互选源，失败自动回退阿里云 |
-| **智能换源 (海外)** | 按国家码匹配镜像区域，内置 14 个地区的 Debian 镜像列表，自动测速选最优 |
+| **智能换源 (海外)** | 按国家码自动映射到 `ftp.<cc>.debian.org` GeoDNS，无需测速 |
 | **CPU 自适应 Swap** | sysbench 基准测试，CPU 强用 zstd 压缩，弱用 lz4，zram 大小 = RAM/2 |
 | **BDP 驱动 TCP 调优** | 根据 speedtest 实测带宽和 RTT 计算 BDP，动态设置 `rmem/wmem` |
 | **BBRv3** | 使用 [Eric86777/vps-tcp-tune](https://github.com/Eric86777/vps-tcp-tune) 安装 XanMod 内核 |
 | **三层安全防御** | UFW (默认拒绝入站) + fail2ban + CrowdSec (带 SSH/HTTP 攻击场景) |
 | **磁盘自适应** | < 20GB 自动限制 journald 日志 (100M)、logrotate (weekly)、挂载 tmpfs |
 
-### 海外镜像区域
+### 海外镜像源策略
 
-内置以下地区的 Debian 镜像源列表，自动测速选最优：
+使用 Debian GeoDNS 系统，按国家码自动路由到最近的官方镜像：
 
-| 区域 | 国家码 | 镜像数 |
-|------|--------|--------|
-| 日本 | JP | 8 |
-| 新加坡 | SG | 3 |
-| 韩国 | KR | 4 |
-| 香港 | HK | 3 |
-| 美国 | US | 7 |
-| 德国 | DE | 6 |
-| 荷兰 | NL | 5 |
-| 英国 | GB | 4 |
-| 法国 | FR | 3 |
-| 瑞典 | SE | 2 |
-| 瑞士 | CH | 1 |
-| 加拿大 | CA | 1 |
-| 澳大利亚 | AU | 1 |
+```
+德国 DE → http://ftp.de.debian.org/debian/
+日本 JP → http://ftp.jp.debian.org/debian/
+美国 US → http://ftp.us.debian.org/debian/
+...
+```
 
-未匹配的国家自动映射到最近区域（如 IT→DE, BR→US, IN→SG 等）。
+未识别国家码 → `http://deb.debian.org/debian/`（全局 GeoDNS）。
 
 ### 使用方法
 

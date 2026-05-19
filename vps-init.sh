@@ -38,78 +38,8 @@ CLOUDFLARED_INSTALLED=0
 REPORT_FILE="/root/setup-report.log"
 START_TIME=""
 
-# Debian mirror regions keyed by country code
-# Format: region_name|mirror1,url1|mirror2,url2|...
-# First entry is always the official Debian mirror for that region
-
-declare -A REGION_MIRRORS
-REGION_MIRRORS["Global"]="Debian Official|http://deb.debian.org/debian/"
-
-REGION_MIRRORS["JP"]="Debian Official|http://ftp.jp.debian.org/debian/|RIKEN|http://ftp.riken.jp/Linux/debian/debian/|JAIST|http://ftp.jaist.ac.jp/pub/Linux/Debian/debian/|Tsukuba Univ|http://ftp.tsukuba.wide.ad.jp/Linux/debian/|Yamagata Univ|http://ftp.yz.yamagata-u.ac.jp/pub/linux/debian/|Tokyo Tech|http://ftp.titech.ac.jp/Linux/debian/|IIJ|http://ftp.iij.ad.jp/pub/linux/debian/debian/|xTom JP|http://mirror.xtom.jp/debian/"
-
-REGION_MIRRORS["SG"]="Debian Official|http://ftp.sg.debian.org/debian/|NUS|http://mirror.nus.edu.sg/debian/|SG.GS|http://mirror.sg.gs/debian/"
-
-REGION_MIRRORS["KR"]="Debian Official|http://ftp.kr.debian.org/debian/|KAIST|http://ftp.kaist.ac.kr/debian/|KREONET|http://ftp.kreonet.net/debian/|LANET|http://ftp.lanet.kr/debian/"
-
-REGION_MIRRORS["HK"]="Debian Official|http://ftp.hk.debian.org/debian/|xTom|http://mirror.xtom.com.hk/debian/|HKIX|http://ftp.hk.debian.org/debian/"
-
-REGION_MIRRORS["US"]="Debian Official|http://ftp.us.debian.org/debian/|OSUOSL|http://debian.osuosl.org/debian/|MIT|http://debian.csail.mit.edu/debian/|Princeton|http://mirror.math.princeton.edu/pub/debian/|Kernel.org|http://mirrors.kernel.org/debian/|Leaseweb US|http://mirror.us.leaseweb.net/debian/|Steadfast|http://mirror.steadfast.net/debian/"
-
-REGION_MIRRORS["DE"]="Debian Official|http://ftp.de.debian.org/debian/|FAU Erlangen|http://ftp.fau.de/debian/|TU Dresden|http://ftp.tu-dresden.de/debian/|RWTH Aachen|http://ftp.halifax.rwth-aachen.de/debian/|NetCologne|http://mirror.netcologne.de/debian/|DFN|http://ftp.hosteurope.de/mirror/debian.org/"
-
-REGION_MIRRORS["NL"]="Debian Official|http://ftp.nl.debian.org/debian/|Leaseweb NL|http://mirror.nl.leaseweb.net/debian/|Worldstream|http://mirror.worldstream.nl/debian/|NForce|http://mirror.nforce.com/pub/linux/debian/|Univ of Twente|http://ftp.snt.utwente.nl/debian/"
-
-REGION_MIRRORS["GB"]="Debian Official|http://ftp.uk.debian.org/debian/|MirrorService|http://www.mirrorservice.org/sites/ftp.debian.org/debian/|RapidSwitch|http://mirror.ox.ac.uk/sites/ftp.debian.org/debian/|Bytemark|http://mirror.bytemark.co.uk/debian/"
-
-REGION_MIRRORS["FR"]="Debian Official|http://ftp.fr.debian.org/debian/|CRIFO|http://ftp.crifo.org/debian/|Univ Lorraine|http://miroir.univ-lorraine.fr/debian/"
-
-REGION_MIRRORS["SE"]="Debian Official|http://ftp.se.debian.org/debian/|Umea Univ|http://ftp.acc.umu.se/debian/"
-
-REGION_MIRRORS["CH"]="ETH Zurich|http://debian.ethz.ch/debian/"
-
-REGION_MIRRORS["CA"]="Debian Official|http://ftp.ca.debian.org/debian/"
-
-REGION_MIRRORS["AU"]="Debian Official|http://ftp.au.debian.org/debian/"
-
-# Country code -> region mapping for servers not in specific list
-declare -A COUNTRY_TO_REGION
-COUNTRY_TO_REGION["JP"]="JP"
-COUNTRY_TO_REGION["SG"]="SG"
-COUNTRY_TO_REGION["KR"]="KR"
-COUNTRY_TO_REGION["HK"]="HK"
-COUNTRY_TO_REGION["US"]="US"
-COUNTRY_TO_REGION["DE"]="DE"
-COUNTRY_TO_REGION["NL"]="NL"
-COUNTRY_TO_REGION["GB"]="GB"
-COUNTRY_TO_REGION["UK"]="GB"
-COUNTRY_TO_REGION["FR"]="FR"
-COUNTRY_TO_REGION["SE"]="SE"
-COUNTRY_TO_REGION["CH"]="CH"
-COUNTRY_TO_REGION["CA"]="CA"
-COUNTRY_TO_REGION["AU"]="AU"
-COUNTRY_TO_REGION["IT"]="DE"
-COUNTRY_TO_REGION["ES"]="FR"
-COUNTRY_TO_REGION["NO"]="SE"
-COUNTRY_TO_REGION["DK"]="SE"
-COUNTRY_TO_REGION["FI"]="SE"
-COUNTRY_TO_REGION["PL"]="DE"
-COUNTRY_TO_REGION["AT"]="DE"
-COUNTRY_TO_REGION["BE"]="NL"
-COUNTRY_TO_REGION["IE"]="GB"
-COUNTRY_TO_REGION["PT"]="FR"
-COUNTRY_TO_REGION["RU"]="DE"
-COUNTRY_TO_REGION["IN"]="SG"
-COUNTRY_TO_REGION["ID"]="SG"
-COUNTRY_TO_REGION["MY"]="SG"
-COUNTRY_TO_REGION["TH"]="SG"
-COUNTRY_TO_REGION["VN"]="SG"
-COUNTRY_TO_REGION["PH"]="SG"
-COUNTRY_TO_REGION["TW"]="HK"
-COUNTRY_TO_REGION["MO"]="HK"
-COUNTRY_TO_REGION["NZ"]="AU"
-COUNTRY_TO_REGION["MX"]="US"
-COUNTRY_TO_REGION["BR"]="US"
-COUNTRY_TO_REGION["AR"]="US"
+# Country → Debian GeoDNS mirror: uses ftp.<cc>.debian.org which auto-routes to
+# the best regional mirror via DNS.  Fallback is deb.debian.org (global GeoDNS).
 
 # =============================================================================
 # Utility Functions
@@ -228,64 +158,15 @@ phase1_detect_env() {
 # Phase 2 - Base Initialization
 # =============================================================================
 
-# Speedtest a mirror: returns total_time (seconds)
-mirror_speed() {
-    local url="$1"
-    local codename="$2"
-    # Test against actual OS codename, not symlink — some mirrors don't carry all releases
-    local test_url="${url}dists/${codename}/Release"
-
-    local total_time
-    total_time=$(curl -o /dev/null -s --connect-timeout 5 --max-time 15 \
-        -w "%{time_total}" "$test_url" 2>/dev/null) || {
-        echo "999"
-        return
-    }
-    echo "${total_time:-999}"
-}
-
-# Find best mirror by total response time (awk only, no bc dependency)
-find_best_mirror() {
-    local country="$1"
-    local region_key="${COUNTRY_TO_REGION[$country]:-Global}"
-    local mirror_data="${REGION_MIRRORS[$region_key]:-${REGION_MIRRORS[Global]}}"
-
-    log_info "Testing mirrors for region: $region_key..."
-
-    local best_url=""
-    local best_time=999
-    local best_name=""
-    local -a parts=()
-    local saved_ifs="$IFS"
-    IFS='|' read -ra parts <<< "$mirror_data"
-    IFS="$saved_ifs"
-
-    local i=0
-    while [[ $i -lt ${#parts[@]} ]]; do
-        local name="${parts[$i]}"
-        local url="${parts[$i+1]:-}"
-        if [[ -n "$url" ]]; then
-            echo -ne "${YELLOW}  Testing $name...${PLAIN}   \r"
-            local total
-            total=$(mirror_speed "$url" "$OS_CODENAME")
-            better=$(awk -v t="$total" -v b="$best_time" 'BEGIN{print (t < b) ? 1 : 0}')
-            if [[ "$better" == "1" ]]; then
-                best_time="$total"
-                best_url="$url"
-                best_name="$name"
-            fi
-            printf "  \e[0;36m%-22s\e[0m total:\e[0;33m%.3fs\e[0m\n" "$name" "$total"
-        fi
-        i=$((i + 2))
-    done
-
-    if [[ -n "$best_url" ]]; then
-        BEST_MIRROR="$best_url"
-        log_ok "Best mirror: $best_name ($BEST_MIRROR) — ${best_time}s"
-    else
-        log_warn "All mirrors failed, using fallback"
-        BEST_MIRROR="http://deb.debian.org/debian/"
-    fi
+# Country → Debian GeoDNS mirror
+country_mirror() {
+    local cc="$1"
+    # Normalize: uppercase, strip anything after dash
+    cc=$(echo "$cc" | tr '[:lower:]' '[:upper:]' | cut -d- -f1)
+    case "$cc" in
+        AD|AE|AF|AG|AI|AL|AM|AO|AQ|AR|AS|AT|AW|AX|AZ|BA|BB|BD|BE|BF|BG|BH|BI|BJ|BL|BM|BN|BO|BQ|BR|BS|BT|BV|BW|BY|BZ|CA|CC|CD|CF|CG|CH|CI|CK|CL|CM|CN|CO|CR|CU|CV|CW|CX|CY|CZ|DE|DJ|DK|DM|DO|DZ|EC|EE|EG|EH|ER|ES|ET|FI|FJ|FK|FM|FO|FR|GA|GB|GD|GE|GF|GG|GH|GI|GL|GM|GN|GP|GQ|GR|GS|GT|GU|GW|GY|HK|HM|HN|HR|HT|HU|ID|IE|IL|IM|IN|IO|IQ|IR|IS|IT|JE|JM|JO|JP|KE|KG|KH|KI|KM|KN|KP|KR|KW|KY|KZ|LA|LB|LC|LI|LK|LR|LS|LT|LU|LV|LY|MA|MC|MD|ME|MF|MG|MH|MK|ML|MM|MN|MO|MP|MQ|MR|MS|MT|MU|MV|MW|MX|MY|MZ|NA|NC|NE|NF|NG|NI|NL|NO|NP|NR|NU|NZ|OM|PA|PE|PF|PG|PH|PK|PL|PM|PN|PR|PS|PT|PW|PY|QA|RE|RO|RS|RU|RW|SA|SB|SC|SD|SE|SG|SH|SI|SJ|SK|SL|SM|SN|SO|SR|SS|ST|SV|SX|SY|SZ|TC|TD|TF|TG|TH|TJ|TK|TL|TM|TN|TO|TR|TT|TV|TW|TZ|UA|UG|UM|US|UY|UZ|VA|VC|VE|VG|VI|VN|VU|WF|WS|YE|YT|ZA|ZM|ZW) echo "http://ftp.${cc,,}.debian.org/debian/" ;;
+        *) echo "http://deb.debian.org/debian/" ;;
+    esac
 }
 
 configure_mirror_cn() {
@@ -319,11 +200,12 @@ EOF
 }
 
 configure_mirror_overseas() {
-    find_best_mirror "$REGION"
+    BEST_MIRROR=$(country_mirror "$REGION")
+    log_info "Using GeoDNS mirror for $REGION: $BEST_MIRROR"
 
     local release_name="${OS_CODENAME:-bookworm}"
 
-    # Disable any conflicting stock Debian repo files so only our sources.list is active
+    # Disable conflicting stock Debian repo files in sources.list.d
     local f
     for f in /etc/apt/sources.list.d/*.list; do
         [[ -f "$f" ]] || continue
