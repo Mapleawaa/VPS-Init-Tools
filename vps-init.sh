@@ -670,6 +670,41 @@ EOF
     else
         log_ok "Sufficient disk space, no space-saving needed"
     fi
+
+    # 4f. Block memory ballooning drivers
+    log_info "Checking for memory ballooning drivers..."
+    local balloon_modules=(
+        "virtio_balloon"
+        "vmw_balloon"
+        "xen_balloon"
+    )
+    local found_balloon=0
+    for mod in "${balloon_modules[@]}"; do
+        if lsmod 2>/dev/null | grep -q "^${mod}"; then
+            log_warn "Found active balloon driver: ${mod}"
+            found_balloon=1
+        fi
+    done
+
+    if [[ $found_balloon -eq 1 ]] || confirm_yes "Force-block balloon drivers?"; then
+        local blist="/etc/modprobe.d/99-vps-init-blacklist.conf"
+        {
+            echo "# VPS Init - Block memory ballooning drivers"
+            echo "# Prevents host over-provisioning from reclaiming guest memory"
+            for mod in "${balloon_modules[@]}"; do
+                if ! grep -q "blacklist ${mod}" "$blist" 2>/dev/null; then
+                    echo "blacklist ${mod}"
+                fi
+                # Unload if active
+                if lsmod 2>/dev/null | grep -q "^${mod}"; then
+                    modprobe -r "$mod" 2>/dev/null && log_ok "Unloaded: ${mod}" || log_warn "Could not unload ${mod}"
+                fi
+            done
+        } >> "$blist"
+        log_ok "Balloon drivers blacklisted (${blist})"
+    else
+        log_info "Skipping balloon driver block"
+    fi
 }
 
 # =============================================================================
