@@ -296,6 +296,18 @@ update_apt() {
 create_user() {
     log_step "Create User"
 
+    echo "  1. Create a new user (disable root SSH)"
+    echo "  2. Keep using root"
+    local auth_choice
+    read -rp "$(echo -e "${YELLOW}Choose [1-2] (default 2): ${PLAIN}")" auth_choice
+    echo ""
+
+    if [[ "$auth_choice" != "1" ]]; then
+        USERNAME="root"
+        log_info "Using root for SSH"
+        return 0
+    fi
+
     local input_username
     while true; do
         read -rp "$(echo -e "${YELLOW}Username: ${PLAIN}")" input_username
@@ -380,11 +392,16 @@ configure_ssh() {
     fi
 
     # authorized_keys
-    local home="/home/${USERNAME}"
+    local home
+    if [[ "$USERNAME" == "root" ]]; then
+        home="/root"
+    else
+        home="/home/${USERNAME}"
+    fi
     mkdir -p "${home}/.ssh"
     echo "$USER_PUB_KEY" > "${home}/.ssh/authorized_keys"
     chmod 700 "${home}/.ssh" && chmod 600 "${home}/.ssh/authorized_keys"
-    chown -R "${USERNAME}:${USERNAME}" "${home}/.ssh"
+    [[ "$USERNAME" != "root" ]] && chown -R "${USERNAME}:${USERNAME}" "${home}/.ssh"
 
     # sshd_config - only modify essential settings
     local cfg="/etc/ssh/sshd_config"
@@ -397,7 +414,11 @@ configure_ssh() {
         fi
     }
     _sshd_set Port "${SSH_PORT}"
-    _sshd_set PermitRootLogin "no"
+    if [[ "$USERNAME" == "root" ]]; then
+        _sshd_set PermitRootLogin "prohibit-password"
+    else
+        _sshd_set PermitRootLogin "no"
+    fi
     _sshd_set PasswordAuthentication "no"
     _sshd_set PubkeyAuthentication "yes"
     _sshd_set PermitEmptyPasswords "no"
@@ -788,13 +809,18 @@ show_summary() {
     echo ""
     echo -e "  User:     ${GREEN}${USERNAME}${PLAIN}"
     [[ -n "${USER_PASSWORD:-}" ]] && echo -e "  Password: ${YELLOW}${USER_PASSWORD}${PLAIN}"
-    echo -e "  Shell:    ${CYAN}${USER_SHELL}${PLAIN}"
+    [[ "$USERNAME" != "root" ]] && echo -e "  Shell:    ${CYAN}${USER_SHELL}${PLAIN}"
     echo -e "  SSH Port: ${RED}${SSH_PORT}${PLAIN}"
     echo ""
     echo -e "  ${YELLOW}Notes:${PLAIN}"
     echo -e "    1. SSH port: ${RED}${SSH_PORT}${PLAIN}"
-    echo -e "    2. Root/password login disabled"
-    echo -e "    3. Connect: ${CYAN}ssh -p ${SSH_PORT} ${USERNAME}@<IP>${PLAIN}"
+    if [[ "$USERNAME" == "root" ]]; then
+        echo -e "    2. Root login: enabled (key only), Password auth: disabled"
+        echo -e "    3. Connect: ${CYAN}ssh -p ${SSH_PORT} root@<IP>${PLAIN}"
+    else
+        echo -e "    2. Root/password login disabled"
+        echo -e "    3. Connect: ${CYAN}ssh -p ${SSH_PORT} ${USERNAME}@<IP>${PLAIN}"
+    fi
     echo ""
     echo -e "  ${RED}*** Do NOT close this session! Test connection in a new terminal first! ***${PLAIN}"
     echo ""

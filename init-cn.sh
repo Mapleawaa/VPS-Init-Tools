@@ -45,97 +45,109 @@ else
     echo -e "${GREEN}已选择海外模式。${PLAIN}"
 fi
 
+# 询问使用 root 还是创建新用户
+echo -e "${YELLOW}请选择登录方式：${PLAIN}"
+echo "1. 创建新用户（禁止 Root SSH 登录）"
+echo "2. 使用 Root 用户登录"
+read -p "请输入选项 [1-2]（默认 2）: " login_choice
+echo ""
+
 # 更新系统
 echo -e "${YELLOW}正在更新系统组件...${PLAIN}"
 apt update -y && apt upgrade -y
 apt install -y curl wget git ufw fail2ban sudo zsh
 
-# 1 & 2 & 3. 用户创建与密钥配置
-echo -e "${YELLOW}正在创建用户...${PLAIN}"
+# 用户创建与密钥配置
+if [[ "$login_choice" == "1" ]]; then
+    echo -e "${YELLOW}正在创建用户...${PLAIN}"
 
-# 让用户输入用户名
-read -p "请输入要创建的用户名 (将自动转换为小写): " input_username
-if [[ -z "$input_username" ]]; then
-    echo -e "${RED}错误：用户名不能为空！${PLAIN}"
-    exit 1
-fi
+    read -p "请输入要创建的用户名（将自动转换为小写）: " input_username
+    if [[ -z "$input_username" ]]; then
+        echo -e "${RED}错误：用户名不能为空！${PLAIN}"
+        exit 1
+    fi
 
-# 转换为纯小写
-USERNAME=$(echo "$input_username" | tr '[:upper:]' '[:lower:]')
+    USERNAME=$(echo "$input_username" | tr '[:upper:]' '[:lower:]')
+    echo -e "${GREEN}将创建用户: $USERNAME${PLAIN}"
 
-echo -e "${GREEN}将创建用户: $USERNAME${PLAIN}"
+    read -s -p "请为用户 $USERNAME 设置密码（直接回车将生成20位随机密码）: " user_password
+    echo
 
-# 设置密码
-read -s -p "请为用户 $USERNAME 设置密码 (直接回车将生成20位随机密码): " user_password
-echo
+    if [[ -z "$user_password" ]]; then
+        user_password=$(generate_password)
+        echo -e "${GREEN}已生成随机密码。${PLAIN}"
+    else
+        echo -e "${GREEN}密码已设置。${PLAIN}"
+    fi
 
-if [[ -z "$user_password" ]]; then
-    # 生成随机密码
-    user_password=$(generate_password)
-    echo -e "${GREEN}已生成随机密码。${PLAIN}"
-else
-    echo -e "${GREEN}密码已设置。${PLAIN}"
-fi
+    if id "$USERNAME" &>/dev/null; then
+        echo -e "${YELLOW}用户 $USERNAME 已存在，跳过创建。${PLAIN}"
+    else
+        useradd -m -s /bin/zsh $USERNAME
+        echo "$USERNAME:$user_password" | chpasswd
+        echo -e "${GREEN}用户 $USERNAME 创建成功。${PLAIN}"
+    fi
 
-# 创建用户或检测是否已存在
-if id "$USERNAME" &>/dev/null; then
-    echo -e "${YELLOW}用户 $USERNAME 已存在，跳过创建。${PLAIN}"
-else
-    useradd -m -s /bin/zsh $USERNAME
-    echo "$USERNAME:$user_password" | chpasswd
-    echo -e "${GREEN}用户 $USERNAME 创建成功。${PLAIN}"
-fi
+    usermod -aG sudo $USERNAME
 
-# 添加用户到sudo组
-usermod -aG sudo $USERNAME
+    NOPASSWD_GROUP="${USERNAME}_nopasswd"
+    echo -e "${YELLOW}正在配置 sudo 无密码权限...${PLAIN}"
 
-# 创建NOPASSWD sudo组并添加用户
-NOPASSWD_GROUP="${USERNAME}_nopasswd"
-echo -e "${YELLOW}正在配置 sudo 无密码权限...${PLAIN}"
+    groupadd $NOPASSWD_GROUP 2>/dev/null || true
+    usermod -aG $NOPASSWD_GROUP $USERNAME
 
-# 创建NOPASSWD组
-groupadd $NOPASSWD_GROUP 2>/dev/null || true
-
-# 将用户加入NOPASSWD组
-usermod -aG $NOPASSWD_GROUP $USERNAME
-
-# 创建sudo配置文件
-cat > /etc/sudoers.d/$USERNAME <<EOF
+    cat > /etc/sudoers.d/$USERNAME <<EOF
 %${NOPASSWD_GROUP} ALL=(ALL) NOPASSWD: ALL
 EOF
 
-# 设置正确的文件权限
-chmod 440 /etc/sudoers.d/$USERNAME
+    chmod 440 /etc/sudoers.d/$USERNAME
+    echo -e "${GREEN}sudo 无密码权限配置完成。${PLAIN}"
 
-echo -e "${GREEN}sudo 无密码权限配置完成。${PLAIN}"
+    echo -e "${YELLOW}请粘贴你的 SSH 公钥（ssh-rsa/ssh-ed25519 ...）:${PLAIN}"
+    read -p "公钥内容: " USER_PUB_KEY
 
-# 获取公钥
-echo -e "${YELLOW}请粘贴你的 SSH 公钥 (ssh-rsa/ssh-ed25519 ...):${PLAIN}"
-read -p "公钥内容: " USER_PUB_KEY
+    if [[ -z "$USER_PUB_KEY" ]]; then
+        echo -e "${RED}错误：未输入公钥，脚本终止。防止将您锁在门外。${PLAIN}"
+        exit 1
+    fi
 
-if [[ -z "$USER_PUB_KEY" ]]; then
-    echo -e "${RED}错误：未输入公钥，脚本终止。防止将您锁在门外。${PLAIN}"
-    exit 1
+    USER_HOME="/home/$USERNAME"
+    mkdir -p "$USER_HOME/.ssh"
+    echo "$USER_PUB_KEY" > "$USER_HOME/.ssh/authorized_keys"
+    chmod 700 "$USER_HOME/.ssh"
+    chmod 600 "$USER_HOME/.ssh/authorized_keys"
+    chown -R $USERNAME:$USERNAME "$USER_HOME/.ssh"
+
+    echo -e "${GREEN}SSH 公钥添加成功。${PLAIN}"
+else
+    echo -e "${YELLOW}使用 Root 用户登录，正在配置 SSH 密钥...${PLAIN}"
+
+    echo -e "${YELLOW}请粘贴你的 SSH 公钥（ssh-rsa/ssh-ed25519 ...）:${PLAIN}"
+    read -p "公钥内容: " USER_PUB_KEY
+
+    if [[ -z "$USER_PUB_KEY" ]]; then
+        echo -e "${RED}错误：未输入公钥，脚本终止。防止将您锁在门外。${PLAIN}"
+        exit 1
+    fi
+
+    mkdir -p /root/.ssh
+    echo "$USER_PUB_KEY" > /root/.ssh/authorized_keys
+    chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys
+    USERNAME="root"
+    echo -e "${GREEN}Root SSH 公钥添加成功。${PLAIN}"
 fi
 
-# 配置 SSH 目录
-USER_HOME="/home/$USERNAME"
-mkdir -p "$USER_HOME/.ssh"
-echo "$USER_PUB_KEY" > "$USER_HOME/.ssh/authorized_keys"
-chmod 700 "$USER_HOME/.ssh"
-chmod 600 "$USER_HOME/.ssh/authorized_keys"
-chown -R $USERNAME:$USERNAME "$USER_HOME/.ssh"
-
-echo -e "${GREEN}SSH 公钥添加成功。${PLAIN}"
-
-# 4 & 2.1. 配置 SSHD (端口 2077，禁止 Root，禁止密码)
+# 配置 SSHD（端口 2077，禁用密码）
 echo -e "${YELLOW}正在配置 SSH 服务 (Port 2077)...${PLAIN}"
 SSH_CONFIG="/etc/ssh/sshd_config"
 cp $SSH_CONFIG "$SSH_CONFIG.bak"
 
-# 使用 sed 修改配置，如果不存在则追加
 sed -i 's/^#\?Port .*/Port 2077/' $SSH_CONFIG
-sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' $SSH_CONFIG
+if [[ "$login_choice" == "1" ]]; then
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' $SSH_CONFIG
+else
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/' $SSH_CONFIG
+fi
 sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' $SSH_CONFIG
 sed -i 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' $SSH_CONFIG
 
@@ -232,15 +244,22 @@ echo -e "${GREEN} 所有配置已完成！ ${PLAIN}"
 echo -e "${BLUE}=================================================${PLAIN}"
 echo -e "用户信息："
 echo -e "用户名: ${GREEN}$USERNAME${PLAIN}"
+if [[ "$login_choice" == "1" ]]; then
 echo -e "密码: ${YELLOW}$user_password${PLAIN}"
+fi
 echo -e "SSH端口: ${RED}2077${PLAIN}"
 echo -e ""
 echo -e "请注意："
 echo -e "1. SSH 端口已改为: ${RED}2077${PLAIN}"
+if [[ "$login_choice" == "1" ]]; then
 echo -e "2. Root 登录已禁用，密码登录已禁用。"
 echo -e "3. 请使用用户: ${GREEN}$USERNAME${PLAIN} 和你的 ${YELLOW}私钥${PLAIN} 登录。"
 echo -e "4. 命令示例: ssh -p 2077 $USERNAME@<Server-IP>"
 echo -e "5. 该用户拥有 sudo 无密码权限。"
+else
+echo -e "2. Root 登录已启用（仅密钥登录），密码登录已禁用。"
+echo -e "3. 连接示例: ssh -p 2077 root@<Server-IP>"
+fi
 echo -e "${RED}*** 重要: 请不要关闭当前窗口，立即新开一个终端测试能否连接！ ***${PLAIN}"
 echo -e "${RED}*** 测试成功后再重启 SSH 服务或重启服务器！ ***${PLAIN}"
 echo -e "${BLUE}=================================================${PLAIN}"
