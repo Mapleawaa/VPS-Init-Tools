@@ -367,43 +367,26 @@ phase2_base_init() {
 
     log_ok "Base tools installed"
 
-    # 2d. Import SSH public key
+    # 2d. Configure SSH user and keys
     log_step "SSH Configuration"
-    read -rp "$(echo -e "${YELLOW}Username: ${PLAIN}")" USERNAME
-    USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | xargs)
-    [[ -z "$USERNAME" ]] && { log_error "Username cannot be empty"; exit 1; }
 
-    read -rp "$(echo -e "${YELLOW}SSH Public Key (required): ${PLAIN}")" USER_PUB_KEY
-    [[ -z "$USER_PUB_KEY" ]] && { log_error "SSH key required to prevent lockout"; exit 1; }
+    # Ask for username; empty = retain current root-based config, skip user setup
+    USERNAME=""
+    while [[ -z "$USERNAME" ]]; do
+        read -rp "$(echo -e "${YELLOW}Username (Enter=skip user setup): ${PLAIN}")" USERNAME
+        USERNAME=$(echo "$USERNAME" | tr '[:upper:]' '[:lower:]' | xargs)
+        [[ -z "$USERNAME" ]] && break
+        if ! echo "$USERNAME" | grep -qE '^[a-z_][a-z0-9_-]*$'; then
+            log_error "Invalid username (lowercase, digits, _/- only)"
+            USERNAME=""
+        fi
+    done
 
+    # SSH port (always prompt)
     read -rp "$(echo -e "${YELLOW}SSH Port (default 2077): ${PLAIN}")" SSH_PORT
     SSH_PORT="${SSH_PORT:-2077}"
 
-    # Create user if not exists
-    if ! id "$USERNAME" &>/dev/null; then
-        useradd -m -s /bin/bash "$USERNAME"
-        log_ok "User $USERNAME created"
-    else
-        log_ok "User $USERNAME already exists"
-    fi
-
-    # Sudo NOPASSWD
-    local sudogrp="${USERNAME}_nopasswd"
-    groupadd "$sudogrp" 2>/dev/null || true
-    usermod -aG sudo "$USERNAME" 2>/dev/null || true
-    usermod -aG "$sudogrp" "$USERNAME"
-    echo "%${sudogrp} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
-    chmod 440 "/etc/sudoers.d/${USERNAME}"
-
-    # SSH key
-    local home="/home/${USERNAME}"
-    mkdir -p "${home}/.ssh"
-    echo "$USER_PUB_KEY" > "${home}/.ssh/authorized_keys"
-    chmod 700 "${home}/.ssh" && chmod 600 "${home}/.ssh/authorized_keys"
-    chown -R "${USERNAME}:${USERNAME}" "${home}/.ssh"
-    log_ok "SSH key added for $USERNAME"
-
-    # 2e. Harden SSH config
+    # Hardening always applies regardless of user setup
     local cfg="/etc/ssh/sshd_config"
     [[ -f "$cfg" ]] && cp "$cfg" "${cfg}.bak.$(date +%Y%m%d_%H%M%S)"
 
@@ -415,7 +398,6 @@ phase2_base_init() {
             echo "${key} ${val}" >> "$cfg"
         fi
     }
-
     _sshd_set Port "${SSH_PORT}"
     _sshd_set PermitRootLogin "no"
     _sshd_set PasswordAuthentication "no"
@@ -426,9 +408,53 @@ phase2_base_init() {
     _sshd_set ClientAliveCountMax "2"
     _sshd_set X11Forwarding "no"
 
-    # Ensure SSH service is running
     systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
     log_ok "SSH hardened (port: $SSH_PORT)"
+
+    if [[ -n "$USERNAME" ]]; then
+        # Create user if not exists
+        if ! id "$USERNAME" &>/dev/null; then
+            useradd -m -s /bin/bash "$USERNAME"
+            log_ok "User $USERNAME created"
+        else
+            log_ok "User $USERNAME already exists"
+        fi
+
+        # Sudo NOPASSWD
+        local sudogrp="${USERNAME}_nopasswd"
+        groupadd "$sudogrp" 2>/dev/null || true
+        usermod -aG sudo "$USERNAME" 2>/dev/null || true
+        usermod -aG "$sudogrp" "$USERNAME"
+        echo "%${sudogrp} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
+        chmod 440 "/etc/sudoers.d/${USERNAME}"
+
+        # Check if SSH key already exists for this user
+        local home="/home/${USERNAME}"
+        local key_found=0
+        if [[ -f "${home}/.ssh/authorized_keys" ]]; then
+            local key_count
+            key_count=$(grep -cvE '^\s*(#|$)' "${home}/.ssh/authorized_keys" 2>/dev/null || echo "0")
+            if [[ "$key_count" -gt 0 ]]; then
+                log_ok "SSH key already configured for ${USERNAME} (${key_count} key(s))"
+                key_found=1
+            fi
+        fi
+
+        if [[ $key_found -eq 0 ]]; then
+            read -rp "$(echo -e "${YELLOW}SSH Public Key (Enter=skip): ${PLAIN}")" USER_PUB_KEY
+            if [[ -n "$USER_PUB_KEY" ]]; then
+                mkdir -p "${home}/.ssh"
+                echo "$USER_PUB_KEY" > "${home}/.ssh/authorized_keys"
+                chmod 700 "${home}/.ssh" && chmod 600 "${home}/.ssh/authorized_keys"
+                chown -R "${USERNAME}:${USERNAME}" "${home}/.ssh"
+                log_ok "SSH key added for $USERNAME"
+            else
+                log_warn "No SSH key provided — you may be locked out after reboot if password auth is also disabled"
+            fi
+        fi
+    else
+        log_info "User setup skipped, root-based config retained"
+    fi
 
     # 2f. Set hostname and timezone
     read -rp "$(echo -e "${YELLOW}Hostname (default: $(hostname)): ${PLAIN}")" HOSTNAME
