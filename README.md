@@ -2,6 +2,14 @@
 
 一键将纯净 Debian/Ubuntu VPS 配置为开箱即用的生产环境。
 
+## 一键启动
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mapleawaa/VPS-Init-Tools/main/start.sh)
+```
+
+选择菜单中的脚本即可开始初始化，无需手动下载。
+
 ## 脚本对比
 
 | | `init-pure-debian.sh` | `init-cn.sh` | `vps-init.sh` |
@@ -422,6 +430,34 @@ readonly DEFAULT_SSH_PORT=2077          # 默认 SSH 端口
 readonly BASE_PACKAGES=(...)            # 基础工具包列表
 readonly SECURITY_PACKAGES=(...)        # 安全工具包列表
 readonly FILES_TO_BACKUP=(...)          # 备份文件列表
+```
+
+---
+
+## start.sh (启动器)
+
+统一入口脚本，提供菜单选择三个初始化脚本，支持一键远程执行。
+
+### 使用方法
+
+```bash
+# 远程一键启动（推荐）
+bash <(curl -fsSL https://raw.githubusercontent.com/Mapleawaa/VPS-Init-Tools/main/start.sh)
+
+# 本地运行
+wget https://raw.githubusercontent.com/Mapleawaa/VPS-Init-Tools/main/start.sh
+chmod +x start.sh
+./start.sh
+```
+
+### 工作流程
+
+```
+start.sh
+  ├── [1] init-cn.sh          → 国内 VPS 快速配置
+  ├── [2] init-pure-debian.sh → 完整功能 (ZSH/Docker/K3s/面板/WAF)
+  ├── [3] vps-init.sh         → 全自动流程 (BBRv3/CrowdSec/CF Tunnel)
+  └── [q] 退出
 ```
 
 ---
